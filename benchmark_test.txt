@@ -1,0 +1,7 @@
+1st run (no parallel) concurrency = 1
+Read through 12000 data file paths in 7.8s total.
+
+3rd run (using rayon to process) concurrency = 1
+Read through 12000 data file paths in 6.5s total.
+
+4th Run (deserializing using non blocking code)

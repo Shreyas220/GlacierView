@@ -66,7 +66,7 @@ impl ManifestListRecord {
                                     }
                                 })
                                 .collect();
-
+                                // eprint!("num of results: {}", results.len());
                             for manifest_path in results {
                                 let stripped_path = manifest_path.strip_prefix("s3://lakehouse/").unwrap_or(&manifest_path);
                                 if output_tx.send(stripped_path.to_string()).await.is_err() {
@@ -88,9 +88,7 @@ impl ManifestListRecord {
         Ok(())
     }
 
-
-    /// Process an Avro file containing `ManifestListRecord`s, returning
-    /// a list of manifest-file paths discovered within it.
+    //not used now 
     async fn process_manifest_list(s3_client: &S3Client, manifest_list_path: &str) -> Result<Vec<String>> {
         
         let data = read_s3_file(s3_client, manifest_list_path).await?;
@@ -158,6 +156,7 @@ impl ManifestFileRecord {
         } {
             match read_s3_file(s3_client, &file_path).await {
                 Result::Ok(data) => {
+                    
                     match Reader::from_slice(&data) {
                         Result::Ok(mut reader) => {
                             let records: Vec<Result<ManifestFileRecord, _>> = reader.deserialize().collect();
@@ -188,7 +187,11 @@ impl ManifestFileRecord {
                             eprintln!("Error reading Avro data: {:?}", e);
                         }
                     
-                    }}
+                    }
+                    
+                }
+
+                    
                     Err(e) => {
                         eprintln!("Error reading Avro data: {:?}", e);
                     }
@@ -199,9 +202,7 @@ impl ManifestFileRecord {
         Ok(())
     }
 
-
-    /// Process an Avro file containing `ManifestFileRecord`s, returning
-    /// a list of snapshot IDs (as strings) discovered within it.
+    //not used now
     async fn process_manifest_file(s3_client: &S3Client, manifest_file_path: &str) -> Result<Vec<String>> {
         let data = read_s3_file(s3_client, manifest_file_path).await?;
         let mut reader = Reader::from_slice(&data)?;
@@ -219,7 +220,6 @@ impl ManifestFileRecord {
         .filter_map(|record_result| {
             // Attempt to unwrap each record; skip if there's an error
             if let Result::Ok(rec) = record_result {
-                // // Clone the `manifest_list` if it exists
                 // rec.snapshot_id.map(|id| id.to_string())
                 Some("Yo".to_string())
             } else {
@@ -274,25 +274,24 @@ async fn main() -> Result<()> {
     );
 
     // Channels
+
     //  1) Avro file paths for "manifest list" stage:
-    let (manifest_list_tx, manifest_list_rx) = mpsc::channel::<String>(1000);
+    let (manifest_list_tx, manifest_list_rx) = mpsc::channel::<String>(4000);
 
     //  2) Avro file paths for "manifest file" stage:
-    let (manifest_file_tx, manifest_file_rx) = mpsc::channel::<String>(1000);
+    let (manifest_file_tx, manifest_file_rx) = mpsc::channel::<String>(8000);
 
     //  3) Final results (snapshot IDs):
     let (final_tx, mut final_rx) = mpsc::channel::<String>(1000);
 
-    // Wrap the receivers so multiple workers can lock them concurrently
     let manifest_list_rx = Arc::new(Mutex::new(manifest_list_rx));
     let manifest_file_rx = Arc::new(Mutex::new(manifest_file_rx));
 
     // Spawn the worker pools
-    let manifest_list_worker_count = 1;
-    let manifest_file_worker_count = 1;
+    let manifest_list_worker_count = 10;
+    let manifest_file_worker_count = 20;
 
-    // Each ManifestListRecord worker reads Avro "list files" and pushes
-    // discovered manifest-file paths into `manifest_file_tx`.
+    // Each ManifestFileRecord worker reads Avro "manifest files" and pushes to manifest_file_tx
     ManifestListRecord::spawn_workers(
         manifest_list_worker_count,
         Arc::clone(&manifest_list_rx),
@@ -300,8 +299,6 @@ async fn main() -> Result<()> {
         s3_client.clone(),
     );
 
-    // Each ManifestFileRecord worker reads Avro "manifest files" and pushes
-    // discovered snapshot IDs into `final_tx`.
     ManifestFileRecord::spawn_workers(
         manifest_file_worker_count,
         Arc::clone(&manifest_file_rx),
@@ -313,9 +310,7 @@ async fn main() -> Result<()> {
     let start_time = std::time::Instant::now();
 
 
-    // Example: send the SAME "manifest_list.avro" file to `ManifestListRecord`
-    // workers 100k times to measure performance.
-    let repeats = 1000;
+    let repeats = 4000;
     let manifest_list_path = "/nyc/taxis_partitioned/metadata/snap-7400282505158315953-1-d5c3b31a-81ac-47a4-b493-e32960f392e4.avro";
     for _ in 0..repeats {
         if manifest_list_tx.send(manifest_list_path.to_string()).await.is_err() {
@@ -335,9 +330,11 @@ async fn main() -> Result<()> {
     }
 
     let duration = start_time.elapsed();
+    //for testing each manifest list file points to 2 manifest files
+    //so for 4000 manifest list files we should read 4000*2 = 8000 manifest files
     println!(
-        "Processed {} final snapshots in {:?} total.",
-        total_snapshots, duration
+        "collected {} data file path and read {} avro files in  {:?} .",
+        total_snapshots, repeats*3 ,duration
     );
 
     Ok(())
